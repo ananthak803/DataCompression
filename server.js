@@ -1,7 +1,7 @@
 const express = require('express');
 const app = express();
 const fs = require('fs');
-const { generateSensorData, generateGPSData, generateAirQualityData, sendToServer ,bitStringToBuffer,bufferToBitString} = require('./services');
+const { generateAirQualityData, sendToServer, bitStringToBuffer, bufferToBitString, readCodes, readEncoded, newDBEntry } = require('./services');
 const { connectMongo } = require('./connection');
 const dataModel = require('./dataModel');
 const path = require('path');
@@ -28,26 +28,35 @@ app.get('/', (req, res) => {
 
 //get req for dashboard
 app.get('/dashboard', async (req, res) => {
-  const allData = await dataModel.find();
+  const allDataStats = await dataModel.find({}, { dataSize: 1, compressedDataSize: 1 }); // For totals only
 
-  const totalEntries = allData.length;
-  const totalOriginalSize = allData.reduce((acc, doc) => acc + doc.dataSize, 0);
-  const totalCompressedSize = allData.reduce((acc, doc) => acc + doc.compressedDataSize, 0);
-  const averageCompressionRatio = totalEntries > 0 
+
+  const totalEntries = allDataStats.length;
+  const totalOriginalSize = allDataStats.reduce((acc, doc) => acc + doc.dataSize, 0);
+  const totalCompressedSize = allDataStats.reduce((acc, doc) => acc + doc.compressedDataSize, 0);
+  const averageCompressionRatio = totalEntries > 0
     ? (totalCompressedSize / totalOriginalSize).toFixed(2)
     : 0;
-  const compressionEfficiency = totalEntries > 0 
+  const compressionEfficiency = totalEntries > 0
     ? (((1 - (totalCompressedSize / totalOriginalSize)) * 100).toFixed(2))
     : 0;
 
   res.render('dashboard', {
     totalEntries,
-    totalOriginalSize,
-    totalCompressedSize,
+    totalOriginalSize: (totalOriginalSize / 1024).toFixed(2),
+    totalCompressedSize: (totalCompressedSize / 1024).toFixed(2),
     averageCompressionRatio,
-    compressionEfficiency
+    compressionEfficiency,
   });
 });
+
+app.get('/test',async (req,res)=>{
+  const data = await dataModel.findOne({},{compressedData:1,codes:1});
+  console.log(data);
+  const s=bufferToBitString(data.compressedData.buffer,data.compressedData.length);
+  console.log(s);
+  res.send("done");
+})
 
 //managing and storing data in database 
 app.post('/data', async (req, res) => {
@@ -55,9 +64,10 @@ app.post('/data', async (req, res) => {
   const originalData = JSON.stringify(req.body);
   const originalBytes = Buffer.byteLength(originalData, 'utf8');
   //path for input and output file of cpp program
-  const inputPath = path.join(__dirname, 'compressionAlgorithms/input.txt');
-  const outputPath = path.join(__dirname, 'compressionAlgorithms/output.txt');
-  const cwd = 'compressionAlgorithms';
+  const inputPath = path.join(__dirname, 'cpp/original_data.txt');
+  const outputPath = path.join(__dirname, 'cpp/encoded.txt');
+  const codesPath = path.join(__dirname, 'cpp/codes.txt');
+  const cwd = 'cpp';
   //writing original data to compressionAlgorithms/input.txt
   fs.writeFile(inputPath, originalData, (err) => {
     if (err) {
@@ -66,43 +76,28 @@ app.post('/data', async (req, res) => {
     }
 
     //running compiled huffman code
-     execFile(path.join(__dirname, 'compressionAlgorithms', 'a.exe'), 
-    { cwd: path.join(__dirname, 'compressionAlgorithms') }, 
-    (error, stdout, stderr) => {
-      if (error) {
-        console.error('Compression failed:', stderr || error.message);
-        return res.status(500).send('Compression error');
-      }
-      //reading compressionAlgorithms/output.txt 
-      fs.readFile(outputPath, 'utf-8', async (err, data) => {
-        if (err) {
-          console.log('Error reading compressed file:', err);
-          return res.status(500).send('Failed to read compressed data');
+    execFile(path.join(__dirname, 'cpp', 'huffmanEncode.exe'),
+      { cwd: path.join(__dirname, 'cpp') },
+      async (error, stdout, stderr) => {
+        if (error) {
+          console.error('Compression failed:');
+          return res.status(500).send('Compression error');
         }
-        //storing the compressed data which in the form of - "01010101101001",string of bits
-        const compressedData = bitStringToBuffer(data);   //converting string of bits to bits
-        const compressedBytes = Buffer.byteLength(compressedData, 'utf8');  // storing compressed data size
+
+        //reading encoded.txt
+        const encodedData = readEncoded(outputPath);
+        console.log(typeof(encodedData))
+        const {buffer,length} = bitStringToBuffer(encodedData);
+        const compressedBytes = Buffer.byteLength(buffer, 'utf8');
+        //reading codes.txt
+        const codes = readCodes(codesPath);
+        if (!codes) {
+          console.log('failed to call readCodes');
+          return;
+        }
         //creating new entry in database
-        try {
-          await dataModel.create({
-            data: originalData,
-            dataSize: originalBytes,
-            compressedData: compressedData,
-            compressedDataSize: compressedBytes,
-          });
-
-          res.status(200).send({
-            message: 'Data compressed and saved successfully',
-            originalSize: originalBytes,
-            compressedSize: compressedBytes,
-          });
-
-        } catch (dbErr) {
-          console.error('Database error:', dbErr);
-          res.status(500).send('Failed to save to database');
-        }
+        await newDBEntry(codes, originalBytes, {buffer,length}, compressedBytes);
       });
-    });
   });
 });
 

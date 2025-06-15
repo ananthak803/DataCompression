@@ -4,14 +4,15 @@ const dataSchema=new mongoose.Schema({
     // deviceId:{
     //     type:String,
     // },
-    data:{
+    codes:{
         type:String,
     },
     dataSize:{
         type:Number,
     },
     compressedData:{
-        type:String,
+        buffer:String,
+        length:Number,
     },
     compressedDataSize:{
         type:Number,
