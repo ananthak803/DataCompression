@@ -1,71 +1,120 @@
-// simulator.js
-const axios = require('axios');
+const fs = require('fs').promises;
+const dataModel = require('./dataModel');
 
-//iot data generators
-function generateSensorData() {
-  return {
-    timestamp: new Date().toISOString(),
-    temperature: (Math.random() * 40).toFixed(2),
-    humidity: (Math.random() * 100).toFixed(2),
-    pressure: (950 + Math.random() * 100).toFixed(2),
-  };
-}
-
-function generateGPSData() {
-  return {
-    timestamp: new Date().toISOString(),
-    latitude: (28 + Math.random()).toFixed(6),  
-    longitude: (77 + Math.random()).toFixed(6),
-    speed: (Math.random() * 80).toFixed(2),        
-    direction: (Math.random() * 360).toFixed(2),   
-  };
-}
-
-function generateAirQualityData() {
-  return {
-    timestamp: new Date().toISOString(),
-    pm25: (Math.random() * 300).toFixed(2),        
-    co2: (400 + Math.random() * 1000).toFixed(2),  
-    voc: (0 + Math.random() * 5).toFixed(2),       
-    temperature: (18 + Math.random() * 10).toFixed(2), 
-  };
-}
-
-//sends the data to server at /data
-async function sendToServer(data) {
+// read text from file
+async function readTextFile(path) {
   try {
-    await axios.post('http://localhost:5000/data', data);
-    console.log('Sent:', data);
+    const content = await fs.readFile(path, 'utf-8');
+    return content;
   } catch (err) {
-    console.error('Error sending data:', err.message);
+    console.error(`error in reading ${path} `, err);
+    return null;
   }
 }
 
-// string of bits to bits converter
-function bitStringToBuffer(bitString) {
-  const bytes = [];
-  for (let i = 0; i < bitString.length; i += 8) {
-    const byteStr = bitString.slice(i, i + 8).padEnd(8, '0'); 
-    const byte = parseInt(byteStr, 2);
-    bytes.push(byte);
+
+// Convert bit string to Buffer
+function bitStringToBuffer(binaryString) {
+  if (!binaryString || typeof binaryString !== 'string') {
+    throw new Error("Invalid binary string passed to bitStringToBuffer()");
   }
-  return Buffer.from(bytes);
+
+  const padLength = (8 - (binaryString.length % 8)) % 8;
+  const padded = binaryString + '0'.repeat(padLength);
+  const byteChunks = padded.match(/.{8}/g);
+  const byteArray = byteChunks.map(b => parseInt(b, 2));
+
+  return {
+    buffer: Buffer.from(byteArray),
+    length: binaryString.length // Store original length to remove padding later
+  };
 }
 
-// bits to string of bits converter
-function bufferToBitString(buffer) {
-  let bitString = '';
-  for (const byte of buffer) {
-    bitString += byte.toString(2).padStart(8, '0');
+// Convert Buffer back to bit string
+function bufferToBitString(base64Str, originalLength) {
+  const buffer = Buffer.from(base64Str, 'base64');
+  const binaryString = [...buffer]
+    .map(byte => byte.toString(2).padStart(8, '0'))
+    .join('');
+  return binaryString.slice(0, originalLength);
+}
+
+
+//writing data in a text file
+async function writeTextFile(filePath,data) {
+  try {
+    await fs.writeFile(filePath, data, 'utf-8');
+  } catch (err) {
+    console.error("error writing codes:", err.message);
   }
-  return bitString;
+}
+
+//raw codes to json
+function codesJSON(data) {
+  const json = {}
+  data.split('\n').forEach(line => {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length !== 2) return;
+
+    let [rawKey, value] = parts;
+
+    // Skip if key or value is missing
+    if (!rawKey || !value) return;
+
+    // Handle escaped characters
+    if (rawKey === '\\n') rawKey = '\n';
+    if (rawKey === '\\"' || rawKey === '\\\"') rawKey = '"';
+
+    json[rawKey] = value;
+  });
+  return JSON.stringify(json);
+}
+
+
+//json to raw codes
+function jsonToRawCodes(codesObject) {
+  const codes = typeof codesObject === 'string' ? JSON.parse(codesObject) : codesObject;
+
+  const escapeChar = (char) => {
+    if (char === '\n') return '\\n';
+    if (char === '"') return '\\"';
+    if (char === '{') return '\\{';
+    if (char === '}') return '\\}';
+    return char;
+  };
+
+  const lines = Object.entries(codes)
+    .filter(([char, code]) => typeof code === 'string' && code.length > 0) // skip malformed
+    .map(([char, code]) => `${escapeChar(char)} ${code}`)
+    .join('\n');
+
+  return lines;
+}
+
+// Insert compressed data into DB
+async function newDBEntry(codes, dataSize, { buffer, length }, compressedDataSize) {
+  try {
+    await dataModel.create({
+      codes,
+      dataSize,
+      compressedData: {
+        buffer: buffer.toString('base64'),
+        length
+      },
+      compressedDataSize
+    });
+    console.log("Database entry saved.");
+  } catch (err) {
+    console.error('Database error:', err);
+  }
 }
 
 module.exports = {
-  generateSensorData,
-  generateGPSData,
-  generateAirQualityData,
-  sendToServer,
+  readTextFile,
   bitStringToBuffer,
   bufferToBitString,
-}
+  writeTextFile,
+  codesJSON,
+  jsonToRawCodes,
+  newDBEntry
+};

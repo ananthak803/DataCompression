@@ -6,7 +6,7 @@ Real Time Data Compression for Iot Devices using Huffman Algorithm
 
 2. npm install
 
-3. Download MongoDB
+3. Download and setup MongoDB
 
 4. run server.js :"node server.js"
 

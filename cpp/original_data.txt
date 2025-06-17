@@ -1,1 +1,1 @@
-{"timestamp":"2025-06-15T16:05:29.017Z","pm25":"50.26","co2":"1389.66","voc":"2.85","temperature":"18.79"}
+{"timestamp":"2025-06-17T09:21:16.259Z","temperature":"10.92","humidity":"87.29","pressure":"1017.90"}

@@ -1,50 +1,43 @@
 #include <iostream>
 #include <fstream>
-#include <string>
+#include <queue>
 #include <unordered_map>
+#include <string>
 
 using namespace std;
 
-// Read code mappings from codes.txt
-unordered_map<char, string> readCodes(const string &filename) {
-    unordered_map<char, string> codes;
-    ifstream codeFile(filename);
-    if (!codeFile) {
-        cerr << "Cannot open " << filename << endl;
-        return codes;
+// Huffman Tree Node
+struct Node {
+    char ch;
+    int freq;
+    Node *left, *right;
+
+    Node(char c, int f) : ch(c), freq(f), left(nullptr), right(nullptr) {}
+};
+
+// Compare nodes for priority queue
+struct Compare {
+    bool operator()(Node* a, Node* b) {
+        return a->freq > b->freq;
+    }
+};
+
+// Generate codes recursively
+void generateCodes(Node* root, string code, unordered_map<char, string>& codes) {
+    if (!root) return;
+
+    if (!root->left && !root->right) {
+        codes[root->ch] = code;
     }
 
-    string chStr, code;
-    while (codeFile >> chStr >> code) {
-        char actualChar;
-        if (chStr == "\\n")
-            actualChar = '\n';
-        else if (chStr == "\\s")
-            actualChar = ' ';
-        else if (chStr == "\\\"")
-            actualChar = '"';
-        else
-            actualChar = chStr[0];
-
-        codes[actualChar] = code;
-    }
-
-    codeFile.close();
-    return codes;
+    generateCodes(root->left, code + "0", codes);
+    generateCodes(root->right, code + "1", codes);
 }
 
 int main() {
-    // Load codes
-    unordered_map<char, string> codes = readCodes("codes.txt");
-    if (codes.empty()) {
-        cerr << "No codes loaded. Exiting." << endl;
-        return 1;
-    }
-
-    // Read original data
     ifstream input("original_data.txt");
     if (!input) {
-        cerr << "Cannot open original_data.txt" << endl;
+        cerr << "Cannot open original_text.txt" << endl;
         return 1;
     }
 
@@ -54,26 +47,64 @@ int main() {
     }
     input.close();
 
-    // Encode data
+    // Frequency map
+    unordered_map<char, int> freq;
+    for (char c : data) {
+        freq[c]++;
+    }
+
+    // Build min-heap priority queue
+    priority_queue<Node*, vector<Node*>, Compare> pq;
+    for (auto& pair : freq) {
+        pq.push(new Node(pair.first, pair.second));
+    }
+
+    // Build Huffman Tree
+    while (pq.size() > 1) {
+        Node* left = pq.top(); pq.pop();
+        Node* right = pq.top(); pq.pop();
+        Node* merged = new Node('\0', left->freq + right->freq);
+        merged->left = left;
+        merged->right = right;
+        pq.push(merged);
+    }
+
+    Node* root = pq.top();
+    unordered_map<char, string> codes;
+    generateCodes(root, "", codes);
+
+    // Encode the data
     string encoded;
     for (char c : data) {
-        if (codes.find(c) != codes.end()) {
-            encoded += codes[c];
-        } else {
-            cerr << "Warning: No code found for character '" << c << "'" << endl;
-        }
+        encoded += codes[c];
     }
 
     // Write encoded data
-    ofstream out("encoded.txt");
-    if (!out) {
+    ofstream outEncoded("encoded.txt");
+    if (!outEncoded) {
         cerr << "Cannot open encoded.txt" << endl;
         return 1;
     }
+    outEncoded << encoded;
+    outEncoded.close();
 
-    out << encoded;
-    out.close();
+    // Write codes to codes.txt
+    ofstream outCodes("codes.txt");
+    if (!outCodes) {
+        cerr << "Cannot open codes.txt" << endl;
+        return 1;
+    }
+    for (auto& pair : codes) {
+        string key;
+        if (pair.first == '\n') key = "\\n";
+        else if (pair.first == ' ') key = "\\s";
+        else if (pair.first == '"') key = "\\\"";
+        else key = string(1, pair.first);
 
-    cout << "Encoding done. Output written to encoded.txt" << endl;
+        outCodes << key << " " << pair.second << "\n";
+    }
+    outCodes.close();
+
+    cout << "Compression done. Encoded data and codes written successfully." << endl;
     return 0;
 }
